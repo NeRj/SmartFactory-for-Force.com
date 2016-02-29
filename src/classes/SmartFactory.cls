@@ -47,18 +47,22 @@ public with sharing class SmartFactory {
 	public static map<String, set<String>> IncludedFields = new map<String, set<String>>();
 
 	public static SObject createSObject(String objectType) {
-		return createSObject(objectType, false);
+		return createSObject(objectType, false, 1, false, null);
 	}
 
-	public static List<SObject> createSObjectList(String objectType, boolean cascade, Integer numberOfObjects) {
-
-		List<SObject> sos = new List<SObject>();
-		for( Integer i=0; i<numberOfObjects; i++ )
-			sos.add(createSObject(objectType, cascade, i));
-		return sos;  
+	public static SObject createSObject(String objectType, boolean doInsert) {
+		return createSObject(objectType, true, 1, doInsert, null);
 	}
 
 	public static SObject createSObject(String objectType, boolean cascade, Integer counter) {
+		return createSObject(objectType, cascade, counter, false, null);
+	}
+
+	public static SObject createSObject(String objectType, boolean cascade, Integer counter, boolean doInsert) {
+		return createSObject(objectType, cascade, counter, doInsert, null);
+	}
+
+	public static SObject createSObject(String objectType, boolean cascade, Integer counter, boolean doInsert, Map<String, SObject> insertedReferences) {
 		System.debug('Creating ' + objectType);
 		Schema.sObjectType token = GlobalDescribe.get(objectType);
 		if (token == null) {
@@ -68,14 +72,39 @@ public with sharing class SmartFactory {
 		SObject obj = token.newSObject();		
 
 		for (Schema.SObjectField field : fieldMapFor(objectType).values()) {
-			setFieldValue(obj, field, cascade, counter);
+			setFieldValue(obj, field, cascade, counter, insertedReferences);
+		}
+
+		if (doInsert){
+			insert obj;
 		}
 
 		return obj;
 	}
 
-	public static SObject createSObject(String objectType, boolean cascade) {
-		return createSObject(objectType, cascade, 1);
+
+
+
+	public static List<SObject> createSObjectList(String objectType, Integer numberOfObjects) {
+		return createSObjectList(objectType, numberOfObjects, false, false);  
+	}
+
+	public static List<SObject> createSObjectList(String objectType, Integer numberOfObjects, boolean cascade) {
+		return createSObjectList(objectType, numberOfObjects, cascade, false);  
+	}
+
+	public static List<SObject> createSObjectList(String objectType, Integer numberOfObjects, boolean cascade, boolean doInsert) {
+		Map<String, SObject> insertedReferences = new Map<String, SObject>();
+
+		List<SObject> sos = new List<SObject>();
+		for( Integer i=0; i<numberOfObjects; i++ )
+			sos.add(createSObject(objectType, cascade, i, false, insertedReferences));
+
+		if (doInsert){
+			insert sos;
+		}
+
+		return sos;  
 	}
 
 	/**
@@ -139,10 +168,10 @@ public with sharing class SmartFactory {
 	}
 
 	static void setFieldValue(SObject obj, Schema.SObjectField field, boolean cascade) {
-		setFieldValue(obj, field, cascade, 0);
+		setFieldValue(obj, field, cascade, 0, null);
 	}
 
-	static void setFieldValue(SObject obj, Schema.SObjectField field, boolean cascade, Integer counter) {
+	static void setFieldValue(SObject obj, Schema.SObjectField field, boolean cascade, Integer counter, Map<String, SObject> insertedReferences) {
 		Schema.DescribeFieldResult fieldDescribe = field.getDescribe();
 
 		if (fieldDescribe.isCreateable() && 
@@ -210,16 +239,21 @@ public with sharing class SmartFactory {
 
 				if (referenceObjectType == 'RecordType') {
 					setRecordType(obj);
-                }else if (referenceObjectType == 'Profile') { 
+                } else if (referenceObjectType == 'Profile') { 
 					obj.put(field,userProfile.Id);
 				} else if (cascade && referenceObjectType != obj.getSObjectType().getDescribe().getName() &&
                             referenceObjectType !='BusinessHours') {
                     // TODO avoid infinite loop for same-type references
-					System.debug('Creating reference to ' + referenceObjectType + ' for field ' + obj.getSObjectType().getDescribe().getName() + '.' + fieldDescribe.getName());
-					SObject reference = createSObject(referenceObjectType);
-					System.debug('Inserting ' + reference);
-					insert reference;
-					obj.put(field, reference.Id);
+                    if (insertedReferences != null && insertedReferences.containsKey(referenceObjectType)){
+                    	obj.put(field, insertedReferences.get(referenceObjectType).Id);
+                    } else {
+						System.debug('Creating reference to ' + referenceObjectType + ' for field ' + obj.getSObjectType().getDescribe().getName() + '.' + fieldDescribe.getName());
+						SObject reference = createSObject(referenceObjectType);
+						System.debug('Inserting ' + reference);
+						insert reference;
+						obj.put(field, reference.Id);
+						insertedReferences.put(referenceObjectType, reference);
+					}
 				}
 			} else if (fieldDescribe.getType() == Schema.DisplayType.TextArea) {
 				obj.put(field, counter.format()); 
